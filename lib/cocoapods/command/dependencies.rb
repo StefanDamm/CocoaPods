@@ -39,16 +39,18 @@ module Pod
       self.description = <<-DESC
         Shows a tree of pod dependencies. Where the child nodes have dependencies on the parent. Can be used to see what pods are effected when updating a pod.
       DESC
-
+      
       def self.options
-        [[
-          "--html", "Print output as html page"
-        ]].concat(super)
+        [
+          ["--nosubspec", "Don't print subspecs"],
+          ["--html", "Print output as html page"],
+        ].concat(super)
       end
 
       def initialize(argv)
         @dependency_name = argv.shift_argument
         @html  = argv.flag?('html')
+        @no_subspec = argv.flag?('nosubspec')
         
         @cached_sources  = SourcesManager.aggregate
         @cached_sets     = {}
@@ -58,21 +60,27 @@ module Pod
         super
       end
       
-      def lookup_dependencies(dependent_spec, dependencies, target_definition)       
-        dependencies.each do |dependency|        
-          reverse_dependencies[dependency.name] = [] unless reverse_dependencies.include?(dependency.name)
-          
-          next if reverse_dependencies[dependency.name].include?(dependent_spec.name)
-          
-          reverse_dependencies[dependency.name] << dependent_spec.name
-
+      def lookup_dependencies(dependent_spec_name, dependencies, target_definition)       
+        dependencies.each do |dependency|
           set = find_cached_set(dependency)
+          
+          if @no_subspec
+            name = set.name
+            dependent_name = dependent_spec_name
+          else
+            name = dependency.name
+            dependent_name = dependent_spec_name
+          end
+          
+          reverse_dependencies[name] = [] unless reverse_dependencies.include?(name)
+          next if reverse_dependencies[name].include?(dependent_name)
+          reverse_dependencies[name] << dependent_name
 
           spec = set.specification.subspec_by_name(dependency.name)
           cached_specs[spec.name] = spec
 
           spec_dependencies = spec.all_dependencies(target_definition.platform)
-          lookup_dependencies(spec, spec_dependencies, target_definition)
+          lookup_dependencies(dependent_spec_name, spec_dependencies, target_definition)
         end
         
         
@@ -96,7 +104,7 @@ module Pod
               begin
                 spec = set.specification.subspec_by_name(set.name)
                 dependencies = spec.all_dependencies(target.platform)
-                lookup_dependencies(spec, dependencies, target)
+                lookup_dependencies(spec.name, dependencies, target)
               rescue Pod::StandardError => e
                 $stderr.puts e
               end
@@ -109,7 +117,7 @@ module Pod
         UI.puts "</body></html>" if @html
       end
       
-      def print_recursive pods,level
+      def print_recursive pods,level,breadcrumb = []
         return unless pods
         
         if @html
@@ -120,7 +128,7 @@ module Pod
           end
         end
         
-        pods.each do |pod|        
+        pods.sort.each do |pod|        
           if @html
             UI.puts "<li>#{pod}"
           else
@@ -128,7 +136,11 @@ module Pod
             level.times {lvl=lvl+"   "}
             UI.puts "#{lvl}#{pod}"
           end
-          print_recursive reverse_dependencies[pod],level+1
+          
+          unless breadcrumb.include? pod
+            breadcrumb << pod
+            print_recursive reverse_dependencies[pod],level+1,breadcrumb.clone
+          end
           
           UI.puts "</li>" if @html
         end
